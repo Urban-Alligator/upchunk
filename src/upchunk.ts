@@ -48,6 +48,7 @@ export type ChunkedStreamIterableOptions = {
   defaultChunkSize?: number;
   minChunkSize?: number;
   maxChunkSize?: number;
+  bytesAlreadyUploaded?: number;
 };
 
 export interface ChunkedIterable extends AsyncIterable<Blob> {
@@ -67,6 +68,7 @@ export class ChunkedStreamIterable implements ChunkedIterable {
   protected _error: Error | undefined;
   public readonly minChunkSize: number;
   public readonly maxChunkSize: number;
+  public readonly rangeStart: number;
 
   constructor(
     protected readableStream: ReadableStream<Uint8Array | Blob>,
@@ -78,6 +80,7 @@ export class ChunkedStreamIterable implements ChunkedIterable {
     this.defaultChunkSize = options.defaultChunkSize ?? DEFAULT_CHUNK_SIZE;
     this.minChunkSize = options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE;
     this.maxChunkSize = options.maxChunkSize ?? DEFAULT_MAX_CHUNK_SIZE;
+    this.rangeStart = options.bytesAlreadyUploaded ?? 0;
   }
 
   get chunkSize() {
@@ -102,6 +105,21 @@ export class ChunkedStreamIterable implements ChunkedIterable {
   async *[Symbol.asyncIterator](): AsyncIterator<Blob> {
     let chunk;
     const reader = this.readableStream.getReader();
+
+    let skippedBytes = 0;
+    while (skippedBytes < this.rangeStart) {
+      const value = (await reader.read()).value;
+      if (value === undefined) {
+        break;
+      }
+
+      skippedBytes += (
+        value instanceof Uint8Array
+          ? new Blob([value], { type: 'application/octet-stream' })
+          : value
+      ).size;
+    }
+
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -164,6 +182,7 @@ export class ChunkedFileIterable implements ChunkedIterable {
   protected _error: Error | undefined;
   public readonly minChunkSize: number;
   public readonly maxChunkSize: number;
+  private readonly initialRangeStart: number;
 
   constructor(
     protected file: File,
@@ -175,6 +194,7 @@ export class ChunkedFileIterable implements ChunkedIterable {
     this.defaultChunkSize = options.defaultChunkSize ?? DEFAULT_CHUNK_SIZE;
     this.minChunkSize = options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE;
     this.maxChunkSize = options.maxChunkSize ?? DEFAULT_MAX_CHUNK_SIZE;
+    this.initialRangeStart = options.bytesAlreadyUploaded ?? 0;
   }
 
   get chunkSize() {
@@ -198,7 +218,8 @@ export class ChunkedFileIterable implements ChunkedIterable {
 
   async *[Symbol.asyncIterator](): AsyncIterator<Blob> {
     const reader = new FileReader();
-    let nextChunkRangeStart = 0;
+    let nextChunkRangeStart = this.initialRangeStart;
+    
     /**
      * Get portion of the file of x bytes corresponding to chunkSize
      */
@@ -335,6 +356,8 @@ export interface UpChunkOptions {
   maxChunkSize?: number;
   minChunkSize?: number;
   useLargeFileWorkaround?: boolean;
+  beginAtChunkNumber?: number;
+  bytesAlreadyUploaded?: number;
 }
 
 export class UpChunk {
@@ -382,7 +405,7 @@ export class UpChunk {
     this.dynamicChunkSize = options.dynamicChunkSize || false;
 
     this.maxFileBytes = (options.maxFileSize || 0) * 1024;
-    this.chunkCount = 0;
+    this.chunkCount = options.beginAtChunkNumber ?? 0;
     this.attemptCount = 0;
     // Initialize offline to the current offline state, where
     // offline is false if
@@ -391,7 +414,7 @@ export class UpChunk {
     this._offline = typeof window !== 'undefined' && !window.navigator.onLine;
     this._paused = false;
     this.success = false;
-    this.nextChunkRangeStart = 0;
+    this.nextChunkRangeStart = options.bytesAlreadyUploaded ?? 0;
 
     if (options.useLargeFileWorkaround) {
       const readableStreamErrorCallback = (event: CustomEvent) => {

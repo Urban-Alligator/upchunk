@@ -7,7 +7,7 @@
     "outDir": "./dist",
     "strictNullChecks": true,
     "moduleResolution": "node",
-    "lib": ["dom", "ES2016"]
+    "lib": ["dom", "ES2016", "ESNext.AsyncIterable"]
   },
   "include": ["src/**/*.ts"]
 }
